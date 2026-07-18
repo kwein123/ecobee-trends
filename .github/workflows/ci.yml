@@ -28,35 +28,16 @@ jobs:
       - name: Generate the demo database
         run: python tools/make_demo_db.py --db /tmp/demo.sqlite3 --hours 6
 
-      - name: Serve it and check the endpoints
+      - name: Start the dashboard
         run: |
           python app/ecobee_dashboard.py --db /tmp/demo.sqlite3 --port 8321 --no-open &
-          for i in $(seq 1 20); do
+          for _ in $(seq 1 20); do
             curl -sf -o /dev/null http://127.0.0.1:8321/ && break
             sleep 0.5
           done
 
-          echo "--- page loads"
-          curl -sf http://127.0.0.1:8321/ | grep -q "Ecobee Trends"
-
-          echo "--- stylesheet loads"
-          curl -sf -o /dev/null http://127.0.0.1:8321/static/theme.css
-
-          echo "--- API returns the demo thermostats"
-          curl -sf "http://127.0.0.1:8321/api/data?hours=6" \
-            | python -c "
-import json, sys
-d = json.load(sys.stdin)
-names = sorted(t['display_name'] for t in d['thermostats'])
-assert names == ['Lake House', 'Main Floor', 'Upstairs'], names
-assert all(t['ts'] for t in d['thermostats']), 'no readings'
-print('ok:', names)
-"
-
-          echo "--- serial numbers are not exposed"
-          if curl -sf "http://127.0.0.1:8321/api/data?hours=6" | grep -qE '10000000000[0-9]'; then
-            echo 'FAIL: raw identifier found in API response'; exit 1
-          fi
+      - name: Smoke-check the running dashboard
+        run: python tools/smoke_check.py --base http://127.0.0.1:8321
 
       - name: Rename/reorder CLI works
         run: |
@@ -69,7 +50,9 @@ print('ok:', names)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build the image
         run: docker build -t ecobee-trends:ci .
+
       - name: Image runs and shows help
         run: docker run --rm ecobee-trends:ci python app/ecobee_logger.py --help
