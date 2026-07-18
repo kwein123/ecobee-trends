@@ -1,0 +1,834 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ecobee Trends</title>
+<link rel="stylesheet" href="static/theme.css">
+<style>
+  /* chart series colors (page-specific; base tokens come from theme.css) */
+  :root {
+    --s-blue:      #2a78d6;
+    --s-aqua:      #1baf7a;
+    --s-yellow:    #eda100;
+    --s-green:     #008300;
+    --s-violet:    #4a3aa7;
+    --s-red:       #e34948;
+    --s-magenta:   #e87ba4;
+    --s-orange:    #eb6834;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --s-blue:      #3987e5;
+      --s-aqua:      #199e70;
+      --s-yellow:    #c98500;
+      --s-green:     #008300;
+      --s-violet:    #9085e9;
+      --s-red:       #e66767;
+      --s-magenta:   #d55181;
+      --s-orange:    #d95926;
+    }
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 20px 16px 48px; }
+  header.top { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-bottom: 6px; }
+  header.top h1 { font-size: 20px; font-weight: 650; margin: 0; }
+  header.top .sub { color: var(--ink-muted); font-size: 12.5px; }
+
+  .filters { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 10px 0 18px; }
+  .seg { display: inline-flex; border: 1px solid var(--ring); border-radius: 8px; overflow: hidden; background: var(--surface); }
+  .seg button {
+    appearance: none; border: 0; background: transparent; color: var(--ink-2);
+    font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer; border-right: 1px solid var(--ring);
+  }
+  .seg button:last-child { border-right: 0; }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: var(--surface); font-weight: 600; }
+  .btn {
+    appearance: none; font: inherit; font-size: 13px; padding: 5px 12px; cursor: pointer;
+    border: 1px solid var(--ring); border-radius: 8px; background: var(--surface); color: var(--ink-2);
+  }
+  .btn:hover { color: var(--ink); }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--ring); border-radius: 12px;
+    padding: 16px 16px 10px; margin-bottom: 20px; transition: opacity .2s;
+  }
+  .panel.loading { opacity: .5; }
+  .panel.dragging { opacity: .55; }
+  .panel-head { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; cursor: grab; }
+  .panel-head:active { cursor: grabbing; }
+  .panel-head h2 { font-size: 16px; font-weight: 650; margin: 0; }
+  .panel-head .meta { color: var(--ink-muted); font-size: 12.5px; }
+
+  .lane-head { display: flex; align-items: center; gap: 6px 12px; flex-wrap: wrap; margin: 10px 0 2px; }
+  .lane-title { font-size: 11.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-2); margin-right: 4px; }
+  .chip {
+    appearance: none; border: 0; background: transparent; font: inherit; font-size: 12.5px;
+    color: var(--ink-2); cursor: pointer; display: inline-flex; align-items: center; gap: 6px;
+    padding: 2px 6px; border-radius: 6px;
+  }
+  .chip:hover { background: var(--ring); }
+  /* key swatch: a color bar (solid) or gradient-drawn dashes matching the
+     chart's 5px-dash / 4px-gap stroke. Color comes from the element's own
+     `color` so currentColor drives both fill and gradient. */
+  .chip .key { width: 22px; height: 2.5px; border-radius: 1px; display: inline-block; background: currentColor; }
+  .chip .key.dashed { background: repeating-linear-gradient(to right, currentColor 0 5px, transparent 5px 9px); }
+  .chip[aria-pressed="false"] { color: var(--ink-muted); }
+  .chip[aria-pressed="false"] .key { color: var(--ink-muted) !important; opacity: .4; }
+
+  .lanes { position: relative; }
+  .lanes svg { display: block; width: 100%; }
+  .lanes text { font: 11px system-ui, -apple-system, "Segoe UI", sans-serif; fill: var(--ink-muted); }
+  .lanes .eq-label { fill: var(--ink-2); font-size: 11px; }
+  .crosshair {
+    position: absolute; top: 0; width: 1px; background: var(--baseline);
+    pointer-events: none; display: none;
+  }
+  .tooltip {
+    position: absolute; min-width: 170px; max-width: 260px; background: var(--surface);
+    border: 1px solid var(--ring); border-radius: 8px; box-shadow: 0 4px 16px rgba(0,0,0,.18);
+    padding: 8px 10px; font-size: 12.5px; pointer-events: none; display: none; z-index: 5;
+  }
+  .tooltip .tt-time { color: var(--ink-muted); font-size: 11.5px; margin-bottom: 5px; }
+  .tooltip .tt-row { display: flex; align-items: center; gap: 7px; margin: 2px 0; }
+  .tooltip .tt-row .key { width: 22px; height: 2.5px; border-radius: 1px; flex: none; background: currentColor; }
+  .tooltip .tt-row .key.dashed { background: repeating-linear-gradient(to right, currentColor 0 5px, transparent 5px 9px); }
+  .tooltip .tt-row .val { font-weight: 650; font-variant-numeric: tabular-nums; }
+  .tooltip .tt-row .lbl { color: var(--ink-2); }
+  .tooltip .tt-eq { margin-top: 5px; padding-top: 5px; border-top: 1px solid var(--grid); color: var(--ink-2); }
+
+  details.table-view { margin: 8px 0 4px; }
+  details.table-view summary { cursor: pointer; color: var(--ink-muted); font-size: 12.5px; }
+  .table-scroll { overflow-x: auto; margin-top: 8px; }
+  table.data { border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  table.data th, table.data td { padding: 3px 10px 3px 0; text-align: right; font-variant-numeric: tabular-nums; }
+  table.data th { color: var(--ink-muted); font-weight: 600; border-bottom: 1px solid var(--grid); }
+  table.data td:first-child, table.data th:first-child { text-align: left; }
+  table.data td.eq { text-align: left; color: var(--ink-2); }
+
+  .empty { color: var(--ink-muted); padding: 30px 0; text-align: center; }
+</style>
+</head>
+<body>
+<!-- Optional site chrome: edit the brand/links, or delete this whole header,
+     to fit wherever you host this. Styles are in app/static/theme.css. -->
+<header class="sb-site">
+  <div class="sb-site-inner">
+    <a class="sb-brand" href="">Ecobee<span class="sb-dot">·</span>Trends</a>
+    <nav class="sb-nav">
+      <a href="https://github.com/kwein123/ecobee-trends">Project&nbsp;docs</a>
+    </nav>
+  </div>
+</header>
+<div class="wrap">
+  <header class="top">
+    <h1>Ecobee Trends</h1>
+    <span class="sub" id="status">loading…</span>
+  </header>
+  <div class="filters" role="group" aria-label="Time range">
+    <div class="seg" id="rangeSeg"></div>
+    <button class="btn" id="refreshBtn">Refresh</button>
+  </div>
+  <main id="panels"></main>
+</div>
+
+<script>
+"use strict";
+
+/* ---------- configuration ---------- */
+
+const RANGES = [
+  { label: "6h", hours: 6 },
+  { label: "24h", hours: 24 },
+  { label: "48h", hours: 48 },
+  { label: "7d", hours: 168 },
+  { label: "30d", hours: 720 },
+  { label: "All", hours: 0 },
+];
+
+const TEMP_SERIES = [
+  { key: "actual_temp_f",  label: "Indoor temp",   color: "--s-blue" },
+  { key: "desired_heat_f", label: "Heat setpoint", color: "--s-red",  step: true, dash: true },
+  { key: "desired_cool_f", label: "Cool setpoint", color: "--s-aqua", step: true, dash: true },
+  { key: "outdoor_temp_f", label: "Outdoor temp",  color: "--s-yellow" },
+];
+const SENSOR_COLORS = ["--s-violet", "--s-magenta", "--s-green", "--s-orange"];
+
+/* Humidity shares the chart with temperature now, so its hues must not
+   repeat the temperature hues — each entity keeps its own color. */
+const HUM_SERIES = [
+  { key: "actual_humidity",   label: "Indoor %RH",       color: "--s-violet" },
+  { key: "desired_dehumidity",label: "Dehumidify above", color: "--s-orange",  step: true, dash: true },
+  { key: "desired_humidity",  label: "Humidify below",   color: "--s-magenta", step: true, dash: true },
+  { key: "outdoor_humidity",  label: "Outdoor %RH",      color: "--s-green" },
+];
+
+const EQUIP_META = {
+  compCool1:  { label: "Cooling",         color: "--s-aqua" },
+  compCool2:  { label: "Cooling (stg 2)", color: "--s-aqua" },
+  heatPump:   { label: "Heat pump",       color: "--s-red" },
+  heatPump2:  { label: "Heat pump 2",     color: "--s-red" },
+  heatPump3:  { label: "Heat pump 3",     color: "--s-red" },
+  auxHeat1:   { label: "Heat",            color: "--s-red" },
+  auxHeat2:   { label: "Heat (stg 2)",    color: "--s-red" },
+  auxHeat3:   { label: "Heat (stg 3)",    color: "--s-red" },
+  fan:        { label: "Fan",             color: "--s-violet" },
+  humidifier: { label: "Humidifier",      color: "--s-magenta" },
+  dehumidifier: { label: "Dehumidifier",  color: "--s-orange" },
+  ventilator: { label: "Ventilator",      color: "--s-yellow" },
+  economizer: { label: "Economizer",      color: "--s-yellow" },
+};
+const eqMeta = (tok) => EQUIP_META[tok] || { label: tok, color: "--s-green" };
+
+const MARGIN = { left: 46, right: 46 };  // right margin hosts the % scale
+const MAX_POINTS = 1200;
+
+/* ---------- state ---------- */
+
+const state = { hours: 24, data: null, timer: null };
+
+const $ = (sel, el = document) => el.querySelector(sel);
+const cssVar = (name) => name; /* referenced via var() directly in SVG attrs */
+
+function visKey(ident, series) { return `ecobee-viz:${ident}:${series}`; }
+function isVisible(ident, series) { return localStorage.getItem(visKey(ident, series)) !== "0"; }
+function setVisible(ident, series, on) { localStorage.setItem(visKey(ident, series), on ? "1" : "0"); }
+
+/* ---------- helpers ---------- */
+
+function fmtTemp(v) { return v == null ? "–" : v.toFixed(1) + "°F"; }
+function fmtHum(v)  { return v == null ? "–" : Math.round(v) + "%"; }
+
+function fmtTick(ms, spanMs) {
+  const d = new Date(ms);
+  if (spanMs <= 36 * 3600e3)
+    return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  if (spanMs <= 10 * 86400e3)
+    return d.toLocaleDateString([], { month: "short", day: "numeric" }) + " " +
+           d.toLocaleTimeString([], { hour: "numeric" });
+  return d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+function fmtFull(ms) {
+  return new Date(ms).toLocaleString([], {
+    month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  });
+}
+
+function niceStep(rough) {
+  const pow = Math.pow(10, Math.floor(Math.log10(rough)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (rough <= m * pow) return m * pow;
+  return 10 * pow;
+}
+function niceTicks(min, max, count) {
+  if (!(max > min)) { min -= 1; max += 1; }
+  const step = niceStep((max - min) / Math.max(count, 1));
+  const ticks = [];
+  for (let v = Math.ceil(min / step) * step; v <= max + 1e-9; v += step)
+    ticks.push(Math.round(v * 100) / 100);
+  return ticks;
+}
+
+/* Downsample columnar data so long ranges stay light. */
+function downsample(ts, numericCols, binaryCols) {
+  const n = ts.length;
+  if (n <= MAX_POINTS) return { ts, numericCols, binaryCols };
+  const k = Math.ceil(n / MAX_POINTS);
+  const outTs = [];
+  const outNum = numericCols.map(() => []);
+  const outBin = binaryCols.map(() => []);
+  for (let i = 0; i < n; i += k) {
+    const end = Math.min(i + k, n);
+    outTs.push(ts[Math.floor((i + end - 1) / 2)]);
+    numericCols.forEach((col, c) => {
+      let sum = 0, cnt = 0;
+      for (let j = i; j < end; j++) if (col[j] != null) { sum += col[j]; cnt++; }
+      outNum[c].push(cnt ? sum / cnt : null);
+    });
+    binaryCols.forEach((col, c) => {
+      let on = 0;
+      for (let j = i; j < end; j++) if (col[j]) { on = 1; break; }
+      outBin[c].push(on);
+    });
+  }
+  return { ts: outTs, numericCols: outNum, binaryCols: outBin };
+}
+
+function medianInterval(ts) {
+  if (ts.length < 2) return 300e3;
+  const d = [];
+  for (let i = 1; i < ts.length; i++) d.push(ts[i] - ts[i - 1]);
+  d.sort((a, b) => a - b);
+  return d[Math.floor(d.length / 2)];
+}
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, parent) {
+  const el = document.createElementNS(SVG_NS, tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+
+/* Build a path with gap breaks; step-after interpolation for setpoints. */
+function seriesPath(ts, values, x, y, gapMs, step) {
+  let d = "", pen = false, prevT = null, prevV = null;
+  for (let i = 0; i < ts.length; i++) {
+    const v = values[i];
+    if (v == null) { pen = false; prevT = null; continue; }
+    if (prevT != null && ts[i] - prevT > gapMs) pen = false;
+    const px = x(ts[i]).toFixed(1), py = y(v).toFixed(1);
+    if (!pen) { d += `M${px},${py}`; pen = true; }
+    else if (step) { d += `L${x(ts[i]).toFixed(1)},${y(prevV).toFixed(1)}L${px},${py}`; }
+    else { d += `L${px},${py}`; }
+    prevT = ts[i]; prevV = v;
+  }
+  return d;
+}
+
+/* ---------- combined chart rendering ---------- */
+
+function drawCombined(container, spec) {
+  // One chart per thermostat: °F scale on the left, % scale on the right,
+  // equipment on/off strips below the plot, shared x axis at the bottom.
+  // spec: {ts, tempDefs, humDefs, eqStrips, domain:[t0,t1], gapMs}
+  const width = container.clientWidth;
+  const strips = spec.eqStrips.filter((s) => s.visible);
+  const TOP = 8, PLOT_H = 260, ROW = 26, XAXIS = 22;
+  const eqH = strips.length ? strips.length * ROW + 6 : 0;
+  const H = TOP + PLOT_H + eqH + XAXIS;
+  const svg = svgEl("svg", { viewBox: `0 0 ${width} ${H}`, width, height: H }, container);
+
+  const [t0, t1] = spec.domain;
+  const x = (t) => MARGIN.left + ((t - t0) / (t1 - t0 || 1)) * (width - MARGIN.left - MARGIN.right);
+  const plotBottom = TOP + PLOT_H;
+
+  const domainOf = (defs) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const s of defs) {
+      if (!s.visible) continue;
+      for (const v of s.values) if (v != null) { if (v < lo) lo = v; if (v > hi) hi = v; }
+    }
+    if (lo === Infinity) return null;
+    const pad = (hi - lo) * 0.12 || 1.5;
+    const ticks = niceTicks(lo - pad, hi + pad, 5);
+    return {
+      lo: Math.min(lo - pad, ticks[0]),
+      hi: Math.max(hi + pad, ticks[ticks.length - 1]),
+      ticks,
+    };
+  };
+  const scaleFor = (dom) => (v) => TOP + (1 - (v - dom.lo) / (dom.hi - dom.lo || 1)) * PLOT_H;
+
+  const tDom = domainOf(spec.tempDefs);
+  const hDom = domainOf(spec.humDefs);
+
+  // gridlines follow the left (°F) scale; if no temp series is visible the
+  // % scale supplies them instead (never both — one set of gridlines).
+  const gridDom = tDom || hDom;
+  if (gridDom) {
+    const gy = scaleFor(gridDom);
+    for (const tv of gridDom.ticks)
+      svgEl("line", {
+        x1: MARGIN.left, x2: width - MARGIN.right, y1: gy(tv), y2: gy(tv),
+        stroke: "var(--grid)", "stroke-width": 1,
+      }, svg);
+  }
+  if (tDom) {
+    const yT = scaleFor(tDom);
+    for (const tv of tDom.ticks) {
+      const lb = svgEl("text", { x: MARGIN.left - 6, y: yT(tv) + 3.5, "text-anchor": "end" }, svg);
+      lb.textContent = `${tv}°`;
+    }
+  }
+  if (hDom) {
+    const yH = scaleFor(hDom);
+    for (const tv of hDom.ticks) {
+      svgEl("line", {
+        x1: width - MARGIN.right, x2: width - MARGIN.right + 4, y1: yH(tv), y2: yH(tv),
+        stroke: "var(--baseline)", "stroke-width": 1,
+      }, svg);
+      const lb = svgEl("text", { x: width - MARGIN.right + 7, y: yH(tv) + 3.5, "text-anchor": "start" }, svg);
+      lb.textContent = `${tv}%`;
+    }
+  }
+
+  const drawSeries = (defs, dom) => {
+    if (!dom) return;
+    const y = scaleFor(dom);
+    for (const s of defs) {
+      if (!s.visible) continue;
+      const d = seriesPath(spec.ts, s.values, x, y, spec.gapMs, s.step);
+      if (!d) continue;
+      svgEl("path", {
+        d, fill: "none", stroke: `var(${s.color})`, "stroke-width": 2,
+        "stroke-linejoin": "round", "stroke-linecap": "round",
+        ...(s.dash ? { "stroke-dasharray": "5 4" } : {}),
+      }, svg);
+    }
+  };
+  drawSeries(spec.tempDefs, tDom);
+  drawSeries(spec.humDefs, hDom);
+
+  // Direct value labels on the setpoint lines. Setpoints are flat and dashed,
+  // so color alone doesn't separate them — and because the y-scale rescales
+  // when one is toggled off, the next-lowest line slides into the exact spot
+  // the hidden one occupied. The value (with ° or % naming its axis) makes
+  // each line self-identifying.
+  const labels = [];
+  const collect = (defs, dom, unit) => {
+    if (!dom) return;
+    const y = scaleFor(dom);
+    for (const s of defs) {
+      if (!s.visible || !s.step) continue;
+      let last = null;
+      for (let i = spec.ts.length - 1; i >= 0; i--)
+        if (s.values[i] != null) { last = s.values[i]; break; }
+      if (last != null) labels.push({ y: y(last), text: `${Math.round(last)}${unit}`, color: s.color });
+    }
+  };
+  collect(spec.tempDefs, tDom, "°");
+  collect(spec.humDefs, hDom, "%");
+  labels.sort((a, b) => a.y - b.y);
+  for (let i = 1; i < labels.length; i++)
+    if (labels[i].y - labels[i - 1].y < 12) labels[i].y = labels[i - 1].y + 12;
+  for (const L of labels) {
+    const el = svgEl("text", {
+      x: width - MARGIN.right - 5, y: L.y - 4, "text-anchor": "end",
+    }, svg);
+    el.style.fill = `var(${L.color})`;   // style beats the .lanes text CSS rule
+    el.style.fontSize = "10px";
+    el.style.fontWeight = "600";
+    el.textContent = L.text;
+  }
+
+  // equipment on/off strips below the plot
+  const half = Math.min(spec.gapMs, medianInterval(spec.ts)) / 2;
+  strips.forEach((s, r) => {
+    const yTop = plotBottom + 6 + r * ROW;
+    const label = svgEl("text", { x: MARGIN.left, y: yTop + 9, class: "eq-label" }, svg);
+    label.textContent = s.label;
+    svgEl("line", {
+      x1: MARGIN.left, x2: width - MARGIN.right, y1: yTop + 21, y2: yTop + 21,
+      stroke: "var(--grid)", "stroke-width": 1,
+    }, svg);
+    let start = null, prevT = null;
+    const flush = (endT) => {
+      if (start == null) return;
+      const x0 = x(Math.max(start - half, t0)), x1p = x(Math.min(endT + half, t1));
+      svgEl("rect", {
+        x: x0, y: yTop + 12, width: Math.max(x1p - x0, 2), height: 9,
+        rx: 3, fill: `var(${s.color})`,
+      }, svg);
+      start = null;
+    };
+    for (let i = 0; i < spec.ts.length; i++) {
+      const on = s.values[i] === 1;
+      if (on && prevT != null && start != null && spec.ts[i] - prevT > spec.gapMs) flush(prevT);
+      if (on && start == null) start = spec.ts[i];
+      if (!on) flush(prevT ?? spec.ts[i]);
+      prevT = spec.ts[i];
+    }
+    flush(prevT);
+  });
+
+  drawXAxis(svg, x, t0, t1, width, H);
+}
+
+function drawXAxis(svg, x, t0, t1, width, H) {
+  const span = t1 - t0;
+  const count = Math.max(2, Math.floor((width - MARGIN.left - MARGIN.right) / 110));
+  svgEl("line", {
+    x1: MARGIN.left, x2: width - MARGIN.right, y1: H - 22, y2: H - 22,
+    stroke: "var(--baseline)", "stroke-width": 1,
+  }, svg);
+  for (let i = 0; i <= count; i++) {
+    const t = t0 + (span * i) / count;
+    const label = svgEl("text", {
+      x: x(t), y: H - 6,
+      "text-anchor": i === 0 ? "start" : i === count ? "end" : "middle",
+    }, svg);
+    label.textContent = fmtTick(t, span);
+  }
+}
+
+/* ---------- panel reordering (drag the panel header) ---------- */
+
+const ORDER_KEY = "ecobee-viz:panel-order";
+
+function savePanelOrder() {
+  const ids = [...document.querySelectorAll("#panels .panel")].map((p) => p.dataset.identifier);
+  localStorage.setItem(ORDER_KEY, JSON.stringify(ids));
+}
+
+/* Panels the user has dragged come first in their saved order; anything new
+   keeps the server order (sort is stable). Per-browser preference. */
+function applySavedOrder(list) {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(ORDER_KEY)) || []; } catch { /* ignore */ }
+  const pos = new Map(saved.map((id, i) => [id, i]));
+  return [...list].sort(
+    (a, b) => (pos.get(a.identifier) ?? 1e9) - (pos.get(b.identifier) ?? 1e9)
+  );
+}
+
+function attachDrag(panel, handle) {
+  handle.draggable = true;
+  handle.title = "Drag to reorder panels";
+  handle.addEventListener("dragstart", (ev) => {
+    ev.dataTransfer.effectAllowed = "move";
+    ev.dataTransfer.setData("text/plain", panel.dataset.identifier);
+    requestAnimationFrame(() => panel.classList.add("dragging"));
+  });
+  handle.addEventListener("dragend", () => {
+    panel.classList.remove("dragging");
+    savePanelOrder();
+  });
+}
+
+/* ---------- panel ---------- */
+
+function legendChips(parent, ident, entries, onToggle) {
+  for (const e of entries) {
+    const chip = document.createElement("button");
+    chip.className = "chip";
+    chip.setAttribute("aria-pressed", String(e.visible));
+    const key = document.createElement("span");
+    key.className = "key" + (e.dash ? " dashed" : "");
+    key.style.color = `var(${e.color})`;
+    chip.appendChild(key);
+    chip.appendChild(document.createTextNode(e.label));
+    chip.addEventListener("click", () => {
+      const now = chip.getAttribute("aria-pressed") !== "true";
+      chip.setAttribute("aria-pressed", String(now));
+      setVisible(ident, e.storageKey, now);
+      onToggle();
+    });
+    parent.appendChild(chip);
+  }
+}
+
+function buildPanel(t, domain, root) {
+  const panel = document.createElement("section");
+  panel.className = "panel";
+  panel.dataset.identifier = t.identifier;
+  root.appendChild(panel); // attach before drawing so clientWidth is real
+
+  const head = document.createElement("div");
+  head.className = "panel-head";
+  const h2 = document.createElement("h2");
+  h2.textContent = t.display_name || t.name || t.identifier;
+  head.appendChild(h2);
+  const meta = document.createElement("span");
+  meta.className = "meta";
+  const running = t.latest.equipment_status
+    ? t.latest.equipment_status.split(",").map((tok) => eqMeta(tok).label.toLowerCase()).join(", ")
+    : "idle";
+  const renamed = t.display_name && t.name && t.display_name !== t.name
+    ? ` · unit “${t.name}”` : "";
+  meta.textContent =
+    `${fmtTemp(t.latest.actual_temp_f)} · ${fmtHum(t.latest.actual_humidity)} RH · ` +
+    `mode ${t.latest.hvac_mode || "?"} · ${running}${renamed} · as of ${fmtFull(t.latest.ts)}` +
+    (t.latest.connected ? "" : " · DISCONNECTED");
+  head.appendChild(meta);
+  panel.appendChild(head);
+
+  // columnar → downsampled working set
+  const sensorSeries = t.sensors.map((s, i) => ({
+    key: `sensor:${s.name}`, label: s.name, color: SENSOR_COLORS[i % SENSOR_COLORS.length],
+    values: s.temperature_f,
+  }));
+  const tempDefs = TEMP_SERIES.map((d) => ({ ...d, values: t.series[d.key] })).concat(sensorSeries);
+  const humDefs = HUM_SERIES.map((d) => ({ ...d, values: t.series[d.key] }));
+  const eqToks = Object.keys(t.equipment);
+
+  const numericCols = tempDefs.map((d) => d.values).concat(humDefs.map((d) => d.values));
+  const binaryCols = eqToks.map((tok) => t.equipment[tok]);
+  const ds = downsample(t.ts, numericCols, binaryCols);
+  const ts = ds.ts;
+  tempDefs.forEach((d, i) => { d.values = ds.numericCols[i]; });
+  humDefs.forEach((d, i) => { d.values = ds.numericCols[tempDefs.length + i]; });
+  const eqStrips = eqToks.map((tok, i) => ({
+    tok, ...eqMeta(tok), values: ds.binaryCols[i],
+    storageKey: `eq:${tok}`, visible: isVisible(t.identifier, `eq:${tok}`),
+  }));
+  const gapMs = medianInterval(ts) * 3;
+
+  for (const d of tempDefs) { d.storageKey = d.key; d.visible = isVisible(t.identifier, d.key); }
+  for (const d of humDefs) { d.storageKey = d.key; d.visible = isVisible(t.identifier, d.key); }
+
+  const lanesWrap = document.createElement("div");
+  lanesWrap.className = "lanes";
+  panel.appendChild(lanesWrap);
+
+  // three key rows above the single combined chart
+  const addKeyRow = (title, entries) => {
+    const headRow = document.createElement("div");
+    headRow.className = "lane-head";
+    const titleEl = document.createElement("span");
+    titleEl.className = "lane-title";
+    titleEl.textContent = title;
+    headRow.appendChild(titleEl);
+    legendChips(headRow, t.identifier, entries, () => renderPanels());
+    lanesWrap.appendChild(headRow);
+  };
+  addKeyRow("Temperature (°F, left scale)", tempDefs);
+  addKeyRow("Relative humidity (%, right scale)", humDefs);
+  if (eqStrips.length) addKeyRow("Equipment running", eqStrips);
+
+  const holder = document.createElement("div");
+  lanesWrap.appendChild(holder);
+  drawCombined(holder, { ts, tempDefs, humDefs, eqStrips, domain, gapMs });
+
+  attachHover(panel, lanesWrap, { ts, tempDefs, humDefs, eqStrips, domain });
+  attachDrag(panel, head);
+  panel.appendChild(buildTable(t));
+  return panel;
+}
+
+/* Panel-wide crosshair + single tooltip. */
+function attachHover(panel, lanesWrap, ctx) {
+  const cross = document.createElement("div");
+  cross.className = "crosshair";
+  lanesWrap.appendChild(cross);
+  const tip = document.createElement("div");
+  tip.className = "tooltip";
+  lanesWrap.appendChild(tip);
+
+  lanesWrap.tabIndex = 0;
+  let idx = -1;
+
+  const xToTime = (px) => {
+    const w = lanesWrap.clientWidth;
+    const frac = (px - MARGIN.left) / (w - MARGIN.left - MARGIN.right || 1);
+    return ctx.domain[0] + frac * (ctx.domain[1] - ctx.domain[0]);
+  };
+  const timeToX = (t) => {
+    const w = lanesWrap.clientWidth;
+    return MARGIN.left + ((t - ctx.domain[0]) / (ctx.domain[1] - ctx.domain[0] || 1)) *
+      (w - MARGIN.left - MARGIN.right);
+  };
+
+  function nearestIndex(time) {
+    const ts = ctx.ts;
+    if (!ts.length) return -1;
+    let lo = 0, hi = ts.length - 1;
+    while (hi - lo > 1) {
+      const mid = (lo + hi) >> 1;
+      if (ts[mid] < time) lo = mid; else hi = mid;
+    }
+    return time - ts[lo] <= ts[hi] - time ? lo : hi;
+  }
+
+  function ttRow(color, valText, lblText, dash) {
+    const row = document.createElement("div");
+    row.className = "tt-row";
+    const key = document.createElement("span");
+    key.className = "key" + (dash ? " dashed" : "");
+    key.style.color = `var(${color})`;
+    row.appendChild(key);
+    const val = document.createElement("span");
+    val.className = "val";
+    val.textContent = valText;
+    row.appendChild(val);
+    const lbl = document.createElement("span");
+    lbl.className = "lbl";
+    lbl.textContent = lblText;
+    row.appendChild(lbl);
+    return row;
+  }
+
+  function show(i) {
+    idx = i;
+    if (i < 0 || i >= ctx.ts.length) { hide(); return; }
+    const xPix = timeToX(ctx.ts[i]);
+    cross.style.display = "block";
+    cross.style.left = xPix + "px";
+    cross.style.height = lanesWrap.clientHeight + "px";
+
+    tip.textContent = "";
+    const time = document.createElement("div");
+    time.className = "tt-time";
+    time.textContent = fmtFull(ctx.ts[i]);
+    tip.appendChild(time);
+    for (const d of ctx.tempDefs)
+      if (d.visible && d.values[i] != null) tip.appendChild(ttRow(d.color, fmtTemp(d.values[i]), d.label, d.dash));
+    for (const d of ctx.humDefs)
+      if (d.visible && d.values[i] != null) tip.appendChild(ttRow(d.color, fmtHum(d.values[i]), d.label, d.dash));
+    if (ctx.eqStrips.length) {
+      const eq = document.createElement("div");
+      eq.className = "tt-eq";
+      const on = ctx.eqStrips.filter((s) => s.visible && s.values[i] === 1).map((s) => s.label);
+      eq.textContent = on.length ? "Running: " + on.join(", ") : "Equipment idle";
+      tip.appendChild(eq);
+    }
+    tip.style.display = "block";
+    const w = lanesWrap.clientWidth;
+    const tw = tip.offsetWidth;
+    tip.style.left = (xPix + 12 + tw > w ? xPix - tw - 12 : xPix + 12) + "px";
+    tip.style.top = "8px";
+  }
+  function hide() {
+    cross.style.display = "none";
+    tip.style.display = "none";
+  }
+
+  lanesWrap.addEventListener("pointermove", (ev) => {
+    const rect = lanesWrap.getBoundingClientRect();
+    show(nearestIndex(xToTime(ev.clientX - rect.left)));
+  });
+  lanesWrap.addEventListener("pointerleave", hide);
+  lanesWrap.addEventListener("keydown", (ev) => {
+    if (ev.key === "ArrowLeft" || ev.key === "ArrowRight") {
+      ev.preventDefault();
+      const next = idx < 0 ? ctx.ts.length - 1 : idx + (ev.key === "ArrowRight" ? 1 : -1);
+      show(Math.max(0, Math.min(ctx.ts.length - 1, next)));
+    } else if (ev.key === "Escape") hide();
+  });
+  lanesWrap.addEventListener("blur", hide);
+}
+
+/* Accessible table view of the same slice. */
+function buildTable(t) {
+  const details = document.createElement("details");
+  details.className = "table-view";
+  const summary = document.createElement("summary");
+  summary.textContent = "Data table";
+  details.appendChild(summary);
+  const scroll = document.createElement("div");
+  scroll.className = "table-scroll";
+  const table = document.createElement("table");
+  table.className = "data";
+  const headRow = document.createElement("tr");
+  for (const h of ["Time", "Temp", "RH", "Heat sp", "Cool sp", "Dehum sp", "Out temp", "Out RH", "Equipment"]) {
+    const th = document.createElement("th");
+    th.textContent = h;
+    headRow.appendChild(th);
+  }
+  table.appendChild(headRow);
+
+  const n = t.ts.length;
+  const start = Math.max(0, n - 200);
+  for (let i = n - 1; i >= start; i--) {
+    const tr = document.createElement("tr");
+    const cells = [
+      fmtFull(t.ts[i]),
+      fmtTemp(t.series.actual_temp_f[i]),
+      fmtHum(t.series.actual_humidity[i]),
+      fmtTemp(t.series.desired_heat_f[i]),
+      fmtTemp(t.series.desired_cool_f[i]),
+      fmtHum(t.series.desired_dehumidity[i]),
+      fmtTemp(t.series.outdoor_temp_f[i]),
+      fmtHum(t.series.outdoor_humidity[i]),
+    ];
+    for (const c of cells) {
+      const td = document.createElement("td");
+      td.textContent = c;
+      tr.appendChild(td);
+    }
+    const eqTd = document.createElement("td");
+    eqTd.className = "eq";
+    const on = Object.entries(t.equipment)
+      .filter(([, arr]) => arr[i] === 1)
+      .map(([tok]) => eqMeta(tok).label);
+    eqTd.textContent = on.join(", ") || "idle";
+    tr.appendChild(eqTd);
+    table.appendChild(tr);
+  }
+  if (n > start) {
+    scroll.appendChild(table);
+    details.appendChild(scroll);
+  }
+  return details;
+}
+
+/* ---------- top level ---------- */
+
+function domainFor(data) {
+  const now = Date.now();
+  if (state.hours > 0) return [now - state.hours * 3600e3, now];
+  let lo = Infinity, hi = -Infinity;
+  for (const t of data.thermostats) {
+    if (t.ts.length) { lo = Math.min(lo, t.ts[0]); hi = Math.max(hi, t.ts[t.ts.length - 1]); }
+  }
+  if (lo === Infinity) { lo = now - 3600e3; hi = now; }
+  return [lo, Math.max(hi, lo + 60e3)];
+}
+
+function renderPanels() {
+  const root = $("#panels");
+  root.textContent = "";
+  const data = state.data;
+  if (!data || !data.thermostats.length) {
+    const div = document.createElement("div");
+    div.className = "empty";
+    div.textContent = "No readings in this range — is ecobee_logger.py running?";
+    root.appendChild(div);
+    return;
+  }
+  const domain = domainFor(data);
+  for (const t of applySavedOrder(data.thermostats)) buildPanel(t, domain, root);
+}
+
+async function fetchData() {
+  document.querySelectorAll(".panel").forEach((p) => p.classList.add("loading"));
+  $("#status").textContent = "loading…";
+  try {
+    // relative URL so the page works both at / (standalone) and under /ecobee/
+    const resp = await fetch(`api/data?hours=${state.hours}`);
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    state.data = await resp.json();
+    const total = state.data.thermostats.reduce((a, t) => a + t.ts.length, 0);
+    $("#status").textContent =
+      `${state.data.thermostats.length} thermostats · ${total.toLocaleString()} readings · ` +
+      `updated ${new Date().toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+    renderPanels();
+  } catch (err) {
+    $("#status").textContent = `error: ${err.message}`;
+  }
+}
+
+function buildRangeSeg() {
+  const seg = $("#rangeSeg");
+  for (const r of RANGES) {
+    const b = document.createElement("button");
+    b.textContent = r.label;
+    b.setAttribute("aria-pressed", String(r.hours === state.hours));
+    b.addEventListener("click", () => {
+      state.hours = r.hours;
+      seg.querySelectorAll("button").forEach((x) => x.setAttribute("aria-pressed", "false"));
+      b.setAttribute("aria-pressed", "true");
+      fetchData();
+    });
+    seg.appendChild(b);
+  }
+}
+
+buildRangeSeg();
+
+// container-level drag handling: move the dragged panel as the pointer
+// crosses other panels' midpoints; order persists on drop (per browser)
+const panelsRoot = $("#panels");
+panelsRoot.addEventListener("dragover", (ev) => {
+  const dragging = panelsRoot.querySelector(".panel.dragging");
+  if (!dragging) return;
+  ev.preventDefault();
+  const next = [...panelsRoot.querySelectorAll(".panel:not(.dragging)")].find((p) => {
+    const r = p.getBoundingClientRect();
+    return ev.clientY < r.top + r.height / 2;
+  });
+  if (next !== dragging.nextElementSibling && next !== dragging)
+    panelsRoot.insertBefore(dragging, next || null);
+});
+panelsRoot.addEventListener("drop", (ev) => ev.preventDefault());
+
+$("#refreshBtn").addEventListener("click", fetchData);
+fetchData();
+state.timer = setInterval(fetchData, 5 * 60e3);
+
+let resizeT = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(() => renderPanels(), 150);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,104 @@
+/* ============================================================
+   theme.css — base tokens + page chrome for the Ecobee Trends dashboard.
+   Warm parchment/serif direction, light and dark.
+
+   Everything is driven from the token block below: change --page,
+   --surface, --ink*, --accent etc. and the whole page (and the chart's
+   grid/axis/label ink) follows. The chart's data-series colors are set
+   separately in ecobee_dashboard.html — they are a validated,
+   colorblind-safe palette, so change those with care.
+
+   Sizing convention: most type/space uses clamp(min, preferred, max) so the
+   layout scales continuously with the viewport instead of snapping at
+   breakpoints.
+   ============================================================ */
+
+:root{
+  /* ---- surfaces & ink ---- */
+  --page:#f7f4ec;        /* parchment page ground        */
+  --surface:#fffdf8;     /* raised card / panel          */
+  --ink:#2a2130;         /* primary text                 */
+  --ink-2:#5b5060;       /* secondary text               */
+  --ink-muted:#8a7f6f;   /* muted / meta text            */
+  --ring:#e4ddcf;        /* hairline borders             */
+  --grid:#e9e2d5;        /* chart gridlines              */
+  --baseline:#d7cebb;    /* stronger baseline / axis     */
+  /* ---- brand accents (blackberry + briar) ---- */
+  --accent:#5c2a55;      /* blackberry — links, fills    */
+  --accent-strong:#7a3a6f;/* accent text on light        */
+  --accent-ink:#fbf6ef;  /* text on an accent fill       */
+  --green:#3c6b3a;       /* briar green — secondary tag  */
+  /* ---- type & shape ---- */
+  --font-serif:Georgia,"Iowan Old Style",Palatino,"Palatino Linotype","Times New Roman",serif;
+  --font-sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --radius:8px;
+  --wrap:1080px;
+  --gutter:clamp(16px,4vw,28px);   /* fluid side padding, shared by wrap + header */
+}
+
+@media (prefers-color-scheme:dark){
+  :root{
+    --page:#1a1620;
+    --surface:#241e2c;
+    --ink:#efe9ef;
+    --ink-2:#c3b9c6;
+    --ink-muted:#968b9c;
+    --ring:#342d3f;
+    --grid:#2b2534;
+    --baseline:#3a3347;
+    --accent:#c49cd4;      /* lightened for contrast on dark */
+    --accent-strong:#d9bce6;
+    --accent-ink:#1a1620;
+    --green:#8fbf5a;
+  }
+}
+
+/* ---------------- base ---------------- */
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--page);color:var(--ink);font-family:var(--font-sans);font-size:15px;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-wrap:break-word}
+h1,h2,h3,h4{font-family:var(--font-serif);font-weight:600;line-height:1.12;color:var(--ink);margin:0 0 .5em}
+a{color:var(--accent-strong);text-decoration:none}
+a:hover{text-decoration:underline}
+img{max-width:100%;display:block}
+::selection{background:color-mix(in srgb,var(--accent) 26%,transparent)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* ---------------- site header ---------------- */
+/* Wordmark scales fluidly so it never crowds a phone screen; the nav wraps
+   to its own line when the row runs out of room — no breakpoint needed. */
+.sb-site{border-bottom:1px solid var(--ring);background:var(--page)}
+.sb-site-inner{
+  max-width:var(--wrap);margin:0 auto;padding:16px var(--gutter);
+  display:flex;align-items:center;justify-content:space-between;
+  gap:clamp(10px,2.4vw,24px);flex-wrap:wrap;row-gap:12px;
+}
+.sb-brand{
+  display:flex;align-items:center;gap:clamp(8px,1.4vw,14px);
+  color:var(--ink);font-family:var(--font-serif);font-weight:600;letter-spacing:-.01em;
+  font-size:clamp(18px,0.9rem + 1vw,27px);          /* was flat 18px */
+}
+.sb-brand:hover{text-decoration:none}
+.sb-brand .sb-dot{color:var(--accent-strong)}
+.sb-nav{display:flex;align-items:center;gap:clamp(12px,2vw,22px);flex-wrap:wrap}
+.sb-nav a{color:var(--ink-2);font-family:var(--font-sans);font-size:clamp(16.5px,0.95rem + 0.4vw,19px)}
+.sb-nav a:hover{color:var(--ink);text-decoration:none}
+.sb-nav a.active{color:var(--ink);font-weight:600}
+.sb-nav a.sb-cta{color:var(--accent-ink);background:var(--accent);padding:8px 16px;border-radius:var(--radius)}
+.sb-nav a.sb-cta:hover{filter:brightness(1.06);text-decoration:none}
+
+/* ---------------- layout ---------------- */
+.sb-wrap{max-width:var(--wrap);margin:0 auto;padding:0 var(--gutter)}
+
+/* ---------------- footer ---------------- */
+.sb-footer{border-top:1px solid var(--ring);margin-top:clamp(36px,5vw,56px)}
+.sb-footer .sb-wrap{padding-top:26px;padding-bottom:34px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;font-size:16px;color:var(--ink-muted)}
+.sb-footer a{color:var(--ink-muted)}
+.sb-footer a:hover{color:var(--accent-strong)}
+
+/* Only breakpoint: very small phones, where the wordmark + nav both
+   need the full width. */
+@media (max-width:420px){
+  .sb-site-inner{flex-direction:column;align-items:flex-start}
+}

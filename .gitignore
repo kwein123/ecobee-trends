@@ -1,0 +1,19 @@
+# Runtime data — NEVER commit these.
+data/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.conf
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

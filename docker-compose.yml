@@ -1,0 +1,48 @@
+# Ecobee Trends — logger + dashboard.
+#
+#   ./setup.sh          first-time setup (login, then starts both services)
+#   docker compose up -d        start
+#   docker compose logs -f logger
+#   docker compose down         stop
+#
+# Data lives in ./data on the host:
+#   data/auth/ecobee.conf    OAuth tokens — mounted ONLY into the logger
+#   data/db/ecobee.sqlite3   readings — the dashboard opens this read-only
+# Keeping the token file out of the web-facing container means a compromise
+# there cannot reach your ecobee credentials.
+
+name: ecobee-trends
+
+services:
+  logger:
+    build: .
+    image: ${ECOBEE_IMAGE:-ecobee-trends:local}
+    container_name: ecobee-logger
+    command: >
+      python app/ecobee_logger.py
+      --config /data/auth/ecobee.conf
+      --db /data/db/ecobee.sqlite3
+      --interval ${POLL_INTERVAL:-300}
+    volumes:
+      - ./data/auth:/data/auth
+      - ./data/db:/data/db
+    restart: unless-stopped
+
+  dashboard:
+    build: .
+    image: ${ECOBEE_IMAGE:-ecobee-trends:local}
+    container_name: ecobee-dashboard
+    # Deliberately no depends_on: the dashboard just reads the database file,
+    # so it can run without the logger (that's what --demo mode uses) and an
+    # unhealthy logger never takes the page down with it.
+    command: >
+      python app/ecobee_dashboard.py
+      --db /data/db/ecobee.sqlite3
+      --host 0.0.0.0
+      --port 8321
+      --no-open
+    volumes:
+      - ./data/db:/data/db          # database only — no access to the tokens
+    ports:
+      - "${DASHBOARD_PORT:-8321}:8321"
+    restart: unless-stopped
