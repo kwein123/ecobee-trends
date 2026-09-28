@@ -33,13 +33,32 @@ is never needed again.
 **Identifiers are masked in the API.** Thermostat identifiers are serial
 numbers. The JSON API replaces them with salted SHA-256 hashes (salt is random
 per install, stored in `meta.public_id_salt`), so serials don't leak to
-browsers. The hashes are stable, so client-side preferences still work.
+browsers. The hashes are stable, so client-side preferences still work. If a
+database somehow has no salt, the server uses a random one per process
+rather than hashing without one, since an unsalted hash of a 12-digit serial
+can be brute-forced.
 
 **Errors don't leak internals.** API errors return a generic message; details
-go to the server log.
+go to the server log. Any unexpected failure still gets a response rather
+than a dropped connection.
 
-**Repeat requests are cheap.** A 60-second response cache bounds the cost of
-hammering `/api/data`.
+**Repeat requests are cheap, and odd ones can't hurt.** `?hours=` is clamped
+(to 10 years), every response is size-bounded (at most 800 points per
+thermostat, whatever the range), and the response cache is a small LRU
+(8 entries, 60 s). An earlier version cached every distinct `?hours=` value
+forever, so varying it slowly could exhaust the server's memory. Slow or
+stalled connections time out after 30 s instead of holding a thread.
+
+**Browser hardening.** The page is served with a strict
+Content-Security-Policy (scripts and styles only from the same origin, no
+inline code, no framing), plus `X-Content-Type-Options: nosniff` and
+`Referrer-Policy: no-referrer`. The `Server` header doesn't advertise the
+Python version.
+
+**The token file survives crashes.** It's written atomically (temp file,
+fsync, rename) with mode 600, so a power cut during a token refresh can't
+leave it empty. That matters because ecobee rotates refresh tokens: losing
+the file mid-rotation would mean logging in again.
 
 **Secrets can't be committed.** `.gitignore` blocks `data/`, `*.sqlite3`,
 `*.conf` and `.env`.

@@ -5,6 +5,9 @@ the logger writes to, keyed by the thermostat's immutable ecobee identifier.
 The logged data keeps the name reported by ecobee; these settings only change
 presentation, so renaming is safe and reversible at any time.
 
+Inside Docker the database path is preset, so these work as-is after
+``docker compose exec logger``.
+
 Usage (ecobee's own names are on the left, yours on the right):
     python app/ecobee_units.py list
     python app/ecobee_units.py rename "My ecobee" "Lake House"
@@ -22,7 +25,7 @@ import os
 import sqlite3
 import sys
 
-DEFAULT_DB = os.path.expanduser("~/.ecobee/ecobee.sqlite3")
+DEFAULT_DB = os.environ.get("ECOBEE_DB", "./data/db/ecobee.sqlite3")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS unit_prefs (
@@ -98,6 +101,8 @@ def cmd_list(db: sqlite3.Connection, _args) -> None:
 
 
 def cmd_rename(db: sqlite3.Connection, args) -> None:
+    if not args.new.strip():
+        sys.exit('The new name is empty. To go back to ecobee\'s name, use "reset".')
     unit = resolve(load_units(db), args.current)
     db.execute(
         """INSERT INTO unit_prefs (identifier, display_name) VALUES (?, ?)
@@ -158,10 +163,21 @@ def main() -> int:
         print(f"Database {db_path} not found — run ecobee_logger.py first.", file=sys.stderr)
         return 2
     db = sqlite3.connect(db_path)
-    db.executescript(SCHEMA)
-    {"list": cmd_list, "rename": cmd_rename, "order": cmd_order, "reset": cmd_reset}[
-        args.command
-    ](db, args)
+    try:
+        db.execute("PRAGMA busy_timeout = 5000")  # the logger may be mid-write
+        has_readings = db.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'thermostat_readings'"
+        ).fetchone()
+        if not has_readings:
+            print("No readings yet — start the logger and wait for its first poll.",
+                  file=sys.stderr)
+            return 2
+        db.executescript(SCHEMA)
+        {"list": cmd_list, "rename": cmd_rename, "order": cmd_order, "reset": cmd_reset}[
+            args.command
+        ](db, args)
+    finally:
+        db.close()
     return 0
 
 

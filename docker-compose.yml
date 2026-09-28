@@ -20,9 +20,12 @@ services:
     container_name: ecobee-logger
     command: >
       python app/ecobee_logger.py
-      --config /data/auth/ecobee.conf
-      --db /data/db/ecobee.sqlite3
       --interval ${POLL_INTERVAL:-300}
+    environment:
+      # Default paths for every script in the image, so one-off commands like
+      # `docker compose exec logger python app/ecobee_units.py list` just work.
+      ECOBEE_CONFIG: /data/auth/ecobee.conf
+      ECOBEE_DB: /data/db/ecobee.sqlite3
     volumes:
       - ./data/auth:/data/auth
       - ./data/db:/data/db
@@ -37,10 +40,11 @@ services:
     # unhealthy logger never takes the page down with it.
     command: >
       python app/ecobee_dashboard.py
-      --db /data/db/ecobee.sqlite3
       --host 0.0.0.0
       --port 8321
       --no-open
+    environment:
+      ECOBEE_DB: /data/db/ecobee.sqlite3
     volumes:
       - ./data/db:/data/db          # database only — no access to the tokens
     ports:

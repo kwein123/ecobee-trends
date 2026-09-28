@@ -6,7 +6,7 @@ config file. The password is NOT stored — only the tokens, which the logger
 (and this library) can refresh indefinitely without re-prompting.
 
 Usage:
-    python scripts/ecobee_login.py [--config ~/.ecobee/ecobee.conf]
+    python app/ecobee_login.py [--config ./data/auth/ecobee.conf]
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from pyecobee import (
     EcobeeAuthUnknownError,
 )
 
-DEFAULT_CONFIG = os.path.expanduser("~/.ecobee/ecobee.conf")
+DEFAULT_CONFIG = os.environ.get("ECOBEE_CONFIG", "./data/auth/ecobee.conf")
 
 
 def main() -> int:

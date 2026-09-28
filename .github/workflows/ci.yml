@@ -1,5 +1,6 @@
-# Runs on every push and pull request: syntax check, a real end-to-end smoke
-# test against the demo database, and a Docker build. Keeps `main` honest.
+# Runs on every push and pull request: unit tests (Python + JavaScript), a
+# real end-to-end smoke test against the demo database, touch tests in a real
+# headless Chrome, and a Docker build. Keeps `main` honest.
 name: CI
 
 on:
@@ -29,7 +30,22 @@ jobs:
           grep -q "github.com/nkgilley/python-ecobee-api" README.md
 
       - name: Byte-compile all sources
-        run: python -m compileall -q app tools pyecobee
+        run: python -m compileall -q app tools pyecobee tests
+
+      - name: Python unit tests
+        run: python -m unittest discover -s tests -v
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: JavaScript unit tests
+        run: node --test tests/js/*.test.js
+
+      - name: Touch tests in headless Chrome (phone emulation)
+        env:
+          REQUIRE_BROWSER: "1"   # fail rather than skip if Chrome is missing
+        run: node --test --test-timeout=60000 tests/browser/*.test.mjs
 
       - name: Generate the demo database
         run: python tools/make_demo_db.py --db /tmp/demo.sqlite3 --hours 6
@@ -62,6 +78,9 @@ jobs:
 
       - name: Image runs and shows help
         run: docker run --rm ecobee-trends:ci python app/ecobee_logger.py --help
+
+      - name: Unit tests pass inside the image (its own Python and SQLite)
+        run: docker run --rm -v "$PWD/tests:/srv/tests:ro" ecobee-trends:ci python -m unittest discover -s tests
 
       - name: Image carries the license notices
         run: |

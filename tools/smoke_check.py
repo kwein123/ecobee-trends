@@ -43,7 +43,11 @@ def main() -> int:
 
         css = fetch(f"{base}/static/theme.css").decode("utf-8", "replace")
         assert "--surface" in css, "theme.css missing its design tokens"
-        checks.append("stylesheet loads")
+        for asset, marker in (("dashboard.css", ".panel"), ("dashboard-core.js", "EcobeeCore"),
+                              ("dashboard.js", "renderPanels")):
+            body = fetch(f"{base}/static/{asset}").decode("utf-8", "replace")
+            assert marker in body, f"{asset} did not look right"
+        checks.append("stylesheets and scripts load")
 
         body = fetch(f"{base}/api/data?hours=6")
         data = json.loads(body)

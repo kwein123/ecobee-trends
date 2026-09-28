@@ -12,16 +12,16 @@ first to create the token config file.
 
 Usage:
     # single poll (suitable for cron / launchd):
-    python scripts/ecobee_logger.py
+    python app/ecobee_logger.py
 
     # poll forever every 5 minutes:
-    python scripts/ecobee_logger.py --interval 300
+    python app/ecobee_logger.py --interval 300
 
     # also keep the full raw API JSON per reading (larger database):
-    python scripts/ecobee_logger.py --interval 300 --raw
+    python app/ecobee_logger.py --interval 300 --raw
 
 Query examples:
-    sqlite3 ~/.ecobee/ecobee.sqlite3 \
+    sqlite3 data/db/ecobee.sqlite3 \
       "SELECT ts_utc, name, actual_temp_f, actual_humidity, equipment_status
        FROM thermostat_readings ORDER BY ts_utc DESC LIMIT 10;"
 """
@@ -48,8 +48,15 @@ from schema import SCHEMA  # table definitions (shared with tools/make_demo_db.p
 
 _LOGGER = logging.getLogger("ecobee_logger")
 
-DEFAULT_CONFIG = os.path.expanduser("~/.ecobee/ecobee.conf")
-DEFAULT_DB = os.path.expanduser("~/.ecobee/ecobee.sqlite3")
+DEFAULT_CONFIG = os.environ.get("ECOBEE_CONFIG", "./data/auth/ecobee.conf")
+DEFAULT_DB = os.environ.get("ECOBEE_DB", "./data/db/ecobee.sqlite3")
+
+# ecobee asks API clients not to poll more often than every 3 minutes; its
+# cloud copy of thermostat data only changes that often anyway.
+MIN_INTERVAL = 60
+RECOMMENDED_MIN_INTERVAL = 180
+# While waiting for a re-login, how often to look for a new token file.
+TOKEN_WAIT_CHECK = 60
 
 # ecobee sentinel for a sensor that has no reading yet.
 ECOBEE_UNKNOWN_VALUES = {"unknown", "-5002", "-5003", ""}
@@ -176,10 +183,57 @@ def poll_once(ecobee: Ecobee, db: sqlite3.Connection, keep_raw: bool) -> None:
 
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = db.cursor()
-    for thermostat in ecobee.thermostats:
-        summary = record_thermostat(cur, ts, thermostat, keep_raw)
+    summaries = []
+    try:
+        for thermostat in ecobee.thermostats or []:
+            if not thermostat.get("identifier"):
+                _LOGGER.warning("Skipping a thermostat with no identifier")
+                continue
+            summaries.append(record_thermostat(cur, ts, thermostat, keep_raw))
+        db.commit()
+    except BaseException:
+        # All of a poll or none of it: without this, rows from a failed poll
+        # would sit in the open transaction and be committed by the next one.
+        db.rollback()
+        raise
+    for summary in summaries:
         _LOGGER.info(summary)
+
+
+def open_db(db_path: str) -> sqlite3.Connection:
+    """Open (creating if needed) the readings database."""
+    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
+    db = sqlite3.connect(db_path)
+    db.execute("PRAGMA journal_mode = WAL")  # concurrent reader (dashboard) friendly
+    db.execute("PRAGMA busy_timeout = 5000")
+    db.executescript(SCHEMA)
+    # One-time random salt: the dashboard hashes thermostat identifiers
+    # (serial numbers) with it so the public API never exposes real serials.
+    db.execute(
+        """INSERT OR IGNORE INTO meta (key, value)
+           VALUES ('public_id_salt', lower(hex(randomblob(16))))"""
+    )
     db.commit()
+    return db
+
+
+def _mtime(path: str) -> Optional[int]:
+    try:
+        return os.stat(path).st_mtime_ns
+    except OSError:
+        return None
+
+
+def wait_for_new_config(config_path: str, sleep=time.sleep) -> None:
+    """Block until the token file is rewritten (someone ran the login again).
+
+    Exiting instead would make Docker restart the logger in a loop, hitting
+    ecobee's auth endpoint with a dead token every time.
+    """
+    before = _mtime(config_path)
+    while _mtime(config_path) == before:
+        sleep(TOKEN_WAIT_CHECK)
+    _LOGGER.info("Token file %s changed; resuming", config_path)
 
 
 def main() -> int:
@@ -204,8 +258,8 @@ def main() -> int:
         default=0,
         metavar="SECONDS",
         help="poll repeatedly at this interval; omit to poll once and exit. "
-        "ecobee only updates runtime data every few minutes, so 300 is a "
-        "sensible floor.",
+        f"ecobee only updates runtime data every few minutes, so 300 is "
+        f"sensible (minimum {MIN_INTERVAL}).",
     )
     parser.add_argument(
         "--raw",
@@ -220,52 +274,70 @@ def main() -> int:
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
+    if args.interval and args.interval < MIN_INTERVAL:
+        _LOGGER.warning("--interval %s is too short; using %s", args.interval, MIN_INTERVAL)
+        args.interval = MIN_INTERVAL
+    elif args.interval and args.interval < RECOMMENDED_MIN_INTERVAL:
+        _LOGGER.warning(
+            "ecobee refreshes its data every few minutes; polling every %ss "
+            "mostly records repeats", args.interval
+        )
+
     config_path = os.path.expanduser(args.config)
     if not os.path.isfile(config_path):
         _LOGGER.error(
-            "Config file %s not found. Run scripts/ecobee_login.py first.", config_path
+            "Config file %s not found. Run app/ecobee_login.py first.", config_path
         )
         return 2
 
-    db_path = os.path.expanduser(args.db)
-    os.makedirs(os.path.dirname(db_path) or ".", exist_ok=True)
-    db = sqlite3.connect(db_path)
-    db.execute("PRAGMA journal_mode = WAL")  # concurrent reader (dashboard) friendly
-    db.execute("PRAGMA busy_timeout = 5000")
-    db.executescript(SCHEMA)
-    # One-time random salt: the dashboard hashes thermostat identifiers
-    # (serial numbers) with it so the public API never exposes real serials.
-    db.execute(
-        """INSERT OR IGNORE INTO meta (key, value)
-           VALUES ('public_id_salt', lower(hex(randomblob(16))))"""
-    )
-    db.commit()
+    db = open_db(os.path.expanduser(args.db))
+    try:
+        return run(config_path, db, args.interval, args.raw)
+    except KeyboardInterrupt:
+        return 0
+    finally:
+        db.close()
 
-    ecobee = Ecobee(config_filename=config_path)
-    ecobee.read_config_from_file()
 
+def run(config_path: str, db: sqlite3.Connection, interval: int, keep_raw: bool,
+        make_client=Ecobee, sleep=time.sleep) -> int:
+    """The polling loop. Returns an exit code (single-poll mode, or fatal)."""
+    ecobee = None
     while True:
-        try:
-            poll_once(ecobee, db, args.raw)
-        except InvalidTokenError:
-            _LOGGER.error(
-                "ecobee tokens are no longer valid; run scripts/ecobee_login.py "
-                "to re-authenticate."
-            )
-            return 3
-        except KeyboardInterrupt:
-            return 0
-        except Exception as err:  # keep a long-running loop alive on transient errors
-            if not args.interval:
-                raise
-            _LOGGER.warning("Poll failed (%s); retrying in %ss", err, args.interval)
+        reason = None
+        if ecobee is None:
+            try:
+                ecobee = make_client(config_filename=config_path)
+                ecobee.read_config_from_file()
+                if not isinstance(ecobee.config, dict):
+                    raise ValueError("not a JSON object")
+            except (OSError, KeyError, TypeError, ValueError) as err:
+                ecobee = None
+                reason = f"token file {config_path} is unreadable ({err!r})"
+        if reason is None:
+            try:
+                poll_once(ecobee, db, keep_raw)
+            except InvalidTokenError:
+                reason = "ecobee tokens are no longer valid"
+            except Exception as err:  # keep a long-running loop alive on transient errors
+                if not interval:
+                    raise
+                _LOGGER.warning("Poll failed (%s); retrying in %ss", err, interval)
 
-        if not args.interval:
+        if reason is not None:
+            # Neither dead tokens nor an unreadable token file fixes itself;
+            # only running the login again does.
+            _LOGGER.error("%s; run app/ecobee_login.py to re-authenticate.", reason)
+            if not interval:
+                return 3
+            _LOGGER.error("Waiting for a new token file before polling again.")
+            wait_for_new_config(config_path, sleep)
+            ecobee = None
+            continue
+
+        if not interval:
             return 0
-        try:
-            time.sleep(args.interval)
-        except KeyboardInterrupt:
-            return 0
+        sleep(interval)
 
 
 if __name__ == "__main__":
