@@ -131,9 +131,18 @@ before(async () => {
     "--headless=new", "--remote-debugging-port=0", `--user-data-dir=${profile}`,
     "--no-first-run", "--no-default-browser-check", "--disable-gpu", "--no-sandbox",
     "about:blank",
-  ], { stdio: "ignore" });
+  ], { stdio: ["ignore", "ignore", "pipe"] });
+  let chromeErr = "";
+  chrome.stderr.on("data", (d) => { chromeErr = (chromeErr + d).slice(-4000); });
+  // Chrome writes this file once it's listening. Cold starts on CI runners
+  // can take well over 10 s, so be patient, but fail fast if it died.
   const portFile = join(profile, "DevToolsActivePort");
-  for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(50);
+  for (let i = 0; i < 1200 && !existsSync(portFile); i++) {
+    if (chrome.exitCode !== null) break;
+    await sleep(50);
+  }
+  if (!existsSync(portFile))
+    throw new Error(`Chrome did not start (exit code ${chrome.exitCode}). Its output:\n${chromeErr}`);
   const [port, browserPath] = readFileSync(portFile, "utf8").split("\n");
   browserWs = `ws://127.0.0.1:${port}${browserPath}`;
   let pages = [];
