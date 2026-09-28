@@ -63,7 +63,7 @@ const chrome = spawn(findChrome(), ["--headless=new", "--remote-debugging-port=0
 try {
   const portFile = join(profile, "DevToolsActivePort");
   for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(50);
-  const port = readFileSync(portFile, "utf8").split("\n")[0];
+  const [port, browserPath] = readFileSync(portFile, "utf8").split("\n");
   let page;
   for (let i = 0; i < 100 && !page; i++) {
     page = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t) => t.type === "page");
@@ -138,9 +138,17 @@ try {
   await touch("touchEnd");
 
   cdp.close();
+  // Quit Chrome properly so its helper processes stop writing to the profile.
+  const browser = await connect(`ws://127.0.0.1:${port}${browserPath}`);
+  await Promise.race([browser.send("Browser.close").catch(() => {}), sleep(3000)]);
+  browser.close();
 } finally {
   chrome.kill();
   server.kill();
   await sleep(500);
-  rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  try {
+    rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (err) {
+    console.warn(`warning: could not remove ${tmp}: ${err.message}`);
+  }
 }

@@ -39,7 +39,7 @@ function findChrome() {
 const CHROME = findChrome();
 const skip = !CHROME && process.env.REQUIRE_BROWSER !== "1" ? "no Chrome/Chromium found" : false;
 
-let tmp, server, chrome, cdp, baseUrl;
+let tmp, server, chrome, cdp, browserWs, baseUrl;
 
 /* Minimal CDP client over Node's built-in WebSocket. */
 async function connect(wsUrl) {
@@ -134,7 +134,8 @@ before(async () => {
   ], { stdio: "ignore" });
   const portFile = join(profile, "DevToolsActivePort");
   for (let i = 0; i < 200 && !existsSync(portFile); i++) await sleep(50);
-  const port = readFileSync(portFile, "utf8").split("\n")[0];
+  const [port, browserPath] = readFileSync(portFile, "utf8").split("\n");
+  browserWs = `ws://127.0.0.1:${port}${browserPath}`;
   let pages = [];
   for (let i = 0; i < 100 && !pages.length; i++) {
     pages = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).filter((t) => t.type === "page");
@@ -157,11 +158,23 @@ after(async () => {
   cdp?.close();
   const exited = (p) => (p && p.exitCode === null ? new Promise((r) => p.once("exit", r)) : null);
   const waits = [exited(chrome), exited(server)];
-  chrome?.kill();
+  // Ask Chrome to quit: unlike kill(), that also stops its helper processes,
+  // which otherwise keep writing to the profile while it's being deleted.
+  try {
+    const browser = await connect(browserWs);
+    await Promise.race([browser.send("Browser.close").catch(() => {}), sleep(3000)]);
+    browser.close();
+  } catch { /* fall back to kill below */ }
+  const killTimer = setTimeout(() => chrome?.kill("SIGKILL"), 5000);
   server?.kill();
   await Promise.all(waits);
-  // Chrome's helper processes can still be flushing the profile for a moment.
-  if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  clearTimeout(killTimer);
+  // Leftover temp files are not a test failure.
+  try {
+    if (tmp) rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (err) {
+    console.warn(`warning: could not remove ${tmp}: ${err.message}`);
+  }
 });
 
 test("a finger on the grip drags the bottom panel to the top", { skip }, async () => {
