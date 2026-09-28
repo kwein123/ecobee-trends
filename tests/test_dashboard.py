@@ -351,6 +351,77 @@ class HttpServer(unittest.TestCase):
             server.server_close()
 
 
+class SiteBranding(unittest.TestCase):
+    """--site-dir: a hosting site's own header, <head> links and images."""
+
+    def setUp(self):
+        self.t = TempDB()
+        self.site = os.path.join(self.t.dir.name, "site")
+        os.mkdir(self.site)
+        with open(os.path.join(self.site, "head.html"), "w") as f:
+            f.write('<link rel="stylesheet" href="/assets/brand.css">\n')
+        with open(os.path.join(self.site, "header.html"), "w") as f:
+            f.write('<header class="brand"><a href="/">Example Co</a></header>\n')
+        with open(os.path.join(self.site, "logo.png"), "wb") as f:
+            f.write(b"\x89PNG fake")
+        handler = type("H", (dash.Handler,), {"db_path": self.t.path, "site_dir": self.site})
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        self.server.shutdown()
+        self.server.server_close()
+        self.t.close()
+
+    def get(self, path):
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_address[1], timeout=10)
+        conn.request("GET", path)
+        resp = conn.getresponse()
+        return resp, resp.read()
+
+    def test_header_replaced_and_head_added(self):
+        resp, body = self.get("/")
+        html = body.decode()
+        self.assertEqual(resp.status, 200)
+        self.assertIn('<header class="brand"><a href="/">Example Co</a></header>', html)
+        self.assertNotIn('class="sb-site"', html, "default header should be gone")
+        self.assertNotIn("site:header", html)
+        head = html[:html.index("</head>")]
+        self.assertIn('href="/assets/brand.css"', head)
+        # The brand stylesheet comes after the base theme and before the page
+        # styles, so it can restyle tokens without breaking the charts.
+        self.assertLess(head.index("theme.css"), head.index("brand.css"))
+        self.assertLess(head.index("brand.css"), head.index("dashboard.css"))
+        self.assertIn("How to read this page", html, "guide link must survive branding")
+
+    def test_site_files(self):
+        resp, body = self.get("/site/logo.png")
+        self.assertEqual((resp.status, resp.getheader("Content-Type"), body),
+                         (200, "image/png", b"\x89PNG fake"))
+        for path in ("/site/header.html", "/site/head.html", "/site/../ecobee.sqlite3",
+                     "/site/%2e%2e/ecobee.sqlite3", "/site/nope.png"):
+            self.assertEqual(self.get(path)[0].status, 404, path)
+
+    def test_only_some_files_present(self):
+        os.remove(os.path.join(self.site, "header.html"))
+        html = self.get("/")[1].decode()
+        self.assertIn('class="sb-site"', html)          # default header kept
+        self.assertIn('href="/assets/brand.css"', html)  # head still applied
+
+    def test_no_site_dir_serves_the_default_page(self):
+        self.assertIn(b'class="sb-site"', dash.render_page(None))
+        plain = type("P", (dash.Handler,), {"db_path": self.t.path, "site_dir": None})
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), plain)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1], timeout=10)
+            conn.request("GET", "/site/logo.png")
+            self.assertEqual(conn.getresponse().status, 404)
+        finally:
+            srv.shutdown()
+            srv.server_close()
+
+
 class Performance(unittest.TestCase):
     """A year of 5-minute readings for three thermostats (~315k rows)."""
 

@@ -82,6 +82,21 @@ jobs:
       - name: Unit tests pass inside the image (its own Python and SQLite)
         run: docker run --rm -v "$PWD/tests:/srv/tests:ro" ecobee-trends:ci python -m unittest discover -s tests
 
+      - name: Compose setup works on Linux (host-owned data folders)
+        # What setup.sh --demo does. On Linux, bind-mounted folders keep the
+        # host's permissions, so the containers must run as the host user.
+        run: |
+          mkdir -p data/auth data/db && chmod 700 data/auth
+          printf 'ECOBEE_UID=%s\nECOBEE_GID=%s\n' "$(id -u)" "$(id -g)" > .env
+          docker compose build --quiet
+          docker compose run --rm --no-deps -T logger python tools/make_demo_db.py --db /data/db/ecobee.sqlite3
+          docker compose run --rm --no-deps -T logger sh -c 'echo "{}" > /data/auth/probe && rm /data/auth/probe'
+          docker compose up -d dashboard
+          for _ in $(seq 1 30); do curl -sf -o /dev/null http://127.0.0.1:8321/ && break; sleep 1; done
+          python3 tools/smoke_check.py --base http://127.0.0.1:8321
+          test "$(stat -c %u data/db/ecobee.sqlite3)" = "$(id -u)"
+          docker compose down
+
       - name: Image carries the license notices
         run: |
           docker run --rm ecobee-trends:ci grep -q "Nolan Gilley" LICENSE

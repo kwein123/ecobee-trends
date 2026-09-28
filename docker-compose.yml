@@ -13,11 +13,17 @@
 
 name: ecobee-trends
 
+# Both containers run as the user that owns ./data on the host (setup.sh
+# records it in .env), so they can write there on Linux, where the host's
+# file permissions apply inside the container as-is.
+x-run-as: &run-as "${ECOBEE_UID:-10001}:${ECOBEE_GID:-10001}"
+
 services:
   logger:
     build: .
     image: ${ECOBEE_IMAGE:-ecobee-trends:local}
     container_name: ecobee-logger
+    user: *run-as
     command: >
       python app/ecobee_logger.py
       --interval ${POLL_INTERVAL:-300}
@@ -35,6 +41,7 @@ services:
     build: .
     image: ${ECOBEE_IMAGE:-ecobee-trends:local}
     container_name: ecobee-dashboard
+    user: *run-as
     # Deliberately no depends_on: the dashboard just reads the database file,
     # so it can run without the logger (that's what --demo mode uses) and an
     # unhealthy logger never takes the page down with it.
@@ -45,8 +52,13 @@ services:
       --no-open
     environment:
       ECOBEE_DB: /data/db/ecobee.sqlite3
+      # To brand the page for your own site, uncomment this and the volume
+      # below, and put head.html / header.html / images in ./site
+      # (README: "Hosting it under your own site").
+      # ECOBEE_SITE_DIR: /site
     volumes:
       - ./data/db:/data/db          # database only — no access to the tokens
+      # - ./site:/site:ro
     ports:
       - "${DASHBOARD_PORT:-8321}:8321"
     restart: unless-stopped

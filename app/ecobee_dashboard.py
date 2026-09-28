@@ -38,8 +38,39 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 HTML_PATH = os.path.join(SCRIPT_DIR, "ecobee_dashboard.html")
 ASSETS_DIR = os.path.join(SCRIPT_DIR, "static")
 ASSET_TYPES = {".css": "text/css; charset=utf-8", ".svg": "image/svg+xml",
-               ".png": "image/png", ".ico": "image/x-icon",
+               ".png": "image/png", ".ico": "image/x-icon", ".jpg": "image/jpeg",
+               ".webp": "image/webp", ".woff2": "font/woff2",
                ".js": "text/javascript; charset=utf-8"}
+# Optional folder that brands the page for the site hosting it (see README,
+# "Hosting it under your own site"). All files in it are optional:
+#   head.html    inserted into <head> (extra stylesheets, favicon links)
+#   header.html  replaces the page's default site header
+#   anything else with an ASSET_TYPES extension is served at site/<name>
+DEFAULT_SITE_DIR = os.environ.get("ECOBEE_SITE_DIR") or None
+
+
+def _read_optional(path: str) -> Optional[str]:
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return None
+
+
+def render_page(site_dir: Optional[str]) -> bytes:
+    """The dashboard HTML, with the site folder's head/header applied."""
+    with open(HTML_PATH, encoding="utf-8") as f:
+        html = f.read()
+    if site_dir:
+        head = _read_optional(os.path.join(site_dir, "head.html"))
+        if head is not None:
+            html = html.replace("<!-- site:head -->", head.strip(), 1)
+        header = _read_optional(os.path.join(site_dir, "header.html"))
+        if header is not None:
+            start, end = "<!-- site:header -->", "<!-- /site:header -->"
+            i, j = html.index(start), html.index(end) + len(end)
+            html = html[:i] + header.strip() + html[j:]
+    return html.encode("utf-8")
 
 TS_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
@@ -403,6 +434,7 @@ def parse_hours(query: str) -> int:
 
 class Handler(BaseHTTPRequestHandler):
     db_path = DEFAULT_DB
+    site_dir = DEFAULT_SITE_DIR
     server_version = "ecobee-trends"
     sys_version = ""
     # Drop connections that stall mid-request instead of holding a thread.
@@ -426,18 +458,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def _route(self, parsed) -> None:
         if parsed.path in ("/", "/index.html"):
-            self._send_file(HTML_PATH, "text/html; charset=utf-8", csp=True)
+            self._send_body(render_page(self.site_dir), "text/html; charset=utf-8", csp=True)
         elif parsed.path.startswith("/static/"):
             # Page assets, served from app/static/. The page links them with
             # relative URLs, so it also works under a reverse-proxy subpath.
-            # basename() confines lookups to that one directory.
-            name = os.path.basename(parsed.path)
-            ext = os.path.splitext(name)[1].lower()
-            path = os.path.join(ASSETS_DIR, name)
-            if name and ext in ASSET_TYPES and os.path.isfile(path):
-                self._send_file(path, ASSET_TYPES[ext])
-            else:
-                self._send(404, "text/plain; charset=utf-8", b"not found")
+            self._send_asset(ASSETS_DIR, parsed.path)
+        elif parsed.path.startswith("/site/") and self.site_dir:
+            self._send_asset(self.site_dir, parsed.path)
         elif parsed.path == "/api/data":
             self._send_data(parse_hours(parsed.query))
         else:
@@ -458,9 +485,19 @@ class Handler(BaseHTTPRequestHandler):
             CACHE.put(hours, *cached)
         self._send(200, "application/json", cached[0], gz=cached[1])
 
-    def _send_file(self, path: str, content_type: str, csp: bool = False) -> None:
-        with open(path, "rb") as f:
-            body = f.read()
+    def _send_asset(self, directory: str, url_path: str) -> None:
+        # basename() confines lookups to that one directory; only known file
+        # types are served, so head.html/header.html stay unreachable.
+        name = os.path.basename(url_path)
+        ext = os.path.splitext(name)[1].lower()
+        path = os.path.join(directory, name)
+        if name and ext in ASSET_TYPES and os.path.isfile(path):
+            with open(path, "rb") as f:
+                self._send_body(f.read(), ASSET_TYPES[ext])
+        else:
+            self._send(404, "text/plain; charset=utf-8", b"not found")
+
+    def _send_body(self, body: bytes, content_type: str, csp: bool = False) -> None:
         etag = '"' + hashlib.sha256(body).hexdigest()[:20] + '"'
         extra = {"ETag": etag, "Cache-Control": "no-cache"}
         if csp:
@@ -520,6 +557,11 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8321)
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--no-open", action="store_true", help="don't open a browser")
+    parser.add_argument(
+        "--site-dir", default=DEFAULT_SITE_DIR,
+        help="folder of optional branding files: head.html, header.html, images "
+             "(default: $ECOBEE_SITE_DIR)",
+    )
     args = parser.parse_args()
 
     db_path = os.path.expanduser(args.db)
@@ -528,6 +570,11 @@ def main() -> int:
         return 2
 
     Handler.db_path = db_path
+    if args.site_dir:
+        Handler.site_dir = os.path.abspath(os.path.expanduser(args.site_dir))
+        if not os.path.isdir(Handler.site_dir):
+            print(f"Site folder {Handler.site_dir} not found.", file=sys.stderr)
+            return 2
     server = None
     for port in range(args.port, args.port + 10):
         try:
