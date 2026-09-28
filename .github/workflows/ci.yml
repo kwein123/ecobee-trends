@@ -22,6 +22,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      - name: Third-party credits are intact
+        run: |
+          grep -q "Copyright (c) 2017 Nolan Gilley" LICENSE-python-ecobee-api.txt
+          grep -q "Nolan Gilley" LICENSE
+          grep -q "github.com/nkgilley/python-ecobee-api" README.md
+
       - name: Byte-compile all sources
         run: python -m compileall -q app tools pyecobee
 
@@ -56,3 +62,8 @@ jobs:
 
       - name: Image runs and shows help
         run: docker run --rm ecobee-trends:ci python app/ecobee_logger.py --help
+
+      - name: Image carries the license notices
+        run: |
+          docker run --rm ecobee-trends:ci grep -q "Nolan Gilley" LICENSE
+          docker run --rm ecobee-trends:ci grep -q "Copyright (c) 2017 Nolan Gilley" LICENSE-python-ecobee-api.txt
