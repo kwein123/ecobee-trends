@@ -9,6 +9,9 @@ actually did, not just what it's doing now.
 No cloud service, no account with anyone but ecobee, no data leaves your
 network unless you publish it yourself.
 
+New to the dashboard (or to ecobee)? Start with the
+**[user guide](docs/user-guide.md)**.
+
 ![Dashboard showing three thermostats with temperature, humidity and equipment timelines](docs/img/dashboard.png)
 
 ## Why one chart instead of three
@@ -71,12 +74,15 @@ Renaming is presentation-only — logged data keeps ecobee's names, so it's
 reversible at any time:
 
 ```bash
-docker compose exec logger python app/ecobee_units.py --db /data/db/ecobee.sqlite3 list
-docker compose exec logger python app/ecobee_units.py --db /data/db/ecobee.sqlite3 rename "My ecobee" "Lake House"
-docker compose exec logger python app/ecobee_units.py --db /data/db/ecobee.sqlite3 order "Lake House" "Main Floor" "Upstairs"
+docker compose exec logger python app/ecobee_units.py list
+docker compose exec logger python app/ecobee_units.py rename "My ecobee" "Lake House"
+docker compose exec logger python app/ecobee_units.py order "Lake House" "Main Floor" "Upstairs"
 ```
 
-You can also drag panels by their title bar to reorder them in your browser.
+`order` sets the default order for everyone. Each viewer can also rearrange
+the panels for themselves by dragging the dotted handle next to a
+thermostat's name (touch, mouse, or keyboard ↑/↓). That order is saved in
+their browser. See the [user guide](docs/user-guide.md#reordering-the-thermostats).
 
 ## What gets recorded
 
@@ -130,10 +136,28 @@ container; the only third-party dependency is `requests`.
 
 ```bash
 pip install -r requirements.txt
-python app/ecobee_login.py --config data/auth/ecobee.conf
-python app/ecobee_logger.py --config data/auth/ecobee.conf --db data/db/ecobee.sqlite3 --interval 300 &
-python app/ecobee_dashboard.py --db data/db/ecobee.sqlite3
+python app/ecobee_login.py                    # writes data/auth/ecobee.conf
+python app/ecobee_logger.py --interval 300 &  # appends to data/db/ecobee.sqlite3
+python app/ecobee_dashboard.py
 ```
+
+Run these from the repository root; the default paths are relative to it.
+`ECOBEE_CONFIG` and `ECOBEE_DB` override them.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests       # Python: API, logger, CLI, HTTP server
+node --test tests/js/*.test.js             # chart and reorder logic
+node --test tests/browser/*.test.mjs       # real touch input in headless Chrome
+```
+
+The browser tests drive a phone-emulated Chrome with genuine touch events,
+because reordering by finger is exactly what mouse-only tests miss. They
+need Chrome or Chromium (`CHROME_PATH` if it isn't found) and skip without
+it. CI runs all three, plus the Python tests inside the Docker image.
+`node tools/screenshots.mjs` regenerates the images in `docs/img/` from the
+demo data.
 
 ## Credits and license
 
@@ -144,10 +168,13 @@ implementation and review were done as a human-directed pair-programming
 exercise, with design decisions, verification and deployment choices made by
 the author. Commits are co-authored accordingly.
 
-The bundled `pyecobee/` client is derived from
+The bundled `pyecobee/` package is
 [python-ecobee-api](https://github.com/nkgilley/python-ecobee-api) by Nolan
-Gilley (MIT), with an added web/OAuth login flow supporting two-factor
-authentication.
+Gilley and contributors (MIT). That includes its web/OAuth login flow with
+two-factor support, contributed upstream by JJTech0130, MizterB and pike00.
+It is vendored from upstream version 0.4.1 with one local change: the token
+file is written atomically, so a crash mid-write can't destroy the only copy
+of a rotating refresh token (see `pyecobee/util.py`).
 
 MIT licensed — see [LICENSE](LICENSE).
 
