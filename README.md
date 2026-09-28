@@ -84,6 +84,43 @@ the panels for themselves by dragging the dotted handle next to a
 thermostat's name (touch, mouse, or keyboard ↑/↓). That order is saved in
 their browser. See the [user guide](docs/user-guide.md#reordering-the-thermostats).
 
+## Hosting it under your own site
+
+The page ships with a small generic header. To make it match the site it's
+part of, without forking or editing the code, give the dashboard a **site
+folder**. Every file in it is optional:
+
+| File | Effect |
+|---|---|
+| `head.html` | Inserted into the page's `<head>`, after the base theme and before the page styles: your stylesheet, favicon links. |
+| `header.html` | Replaces the default header at the top of the page. |
+| images, fonts, `.css` | Served at `site/<name>`, e.g. `<img src="site/logo.png">`. |
+
+```html
+<!-- site/head.html -->
+<link rel="icon" href="site/favicon.png">
+<link rel="stylesheet" href="/assets/my-site.css">
+```
+
+```html
+<!-- site/header.html -->
+<header class="sb-site"><div class="sb-site-inner">
+  <a class="sb-brand" href="/"><img src="site/logo.png" alt="">My Site</a>
+  <nav class="sb-nav"><a href="/">Home</a><a href="" class="active">Thermostats</a></nav>
+</div></header>
+```
+
+Point the dashboard at it with `--site-dir ./site` (or `ECOBEE_SITE_DIR`);
+in Docker, uncomment the two `site` lines in `docker-compose.yml`. Your
+stylesheet can restyle everything by overriding the tokens at the top of
+[`app/static/theme.css`](app/static/theme.css) (`--page`, `--surface`,
+`--ink`, `--accent`, …). The page's security policy only loads files from the
+dashboard's own site, so link stylesheets and images from there, not from
+other domains, and don't add inline scripts or styles (they won't run).
+
+The folder is read on every page load, so edits show up on refresh. Pin your
+deployment to a release tag and branding survives upgrades untouched.
+
 ## What gets recorded
 
 Every poll, per thermostat: HVAC mode, current program climate, **running

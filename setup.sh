@@ -58,6 +58,9 @@ cat > .env <<EOF
 # Written by setup.sh — safe to edit, then: docker compose up -d
 DASHBOARD_PORT=$PORT
 POLL_INTERVAL=$INTERVAL
+# The containers run as you, so they can write to ./data (needed on Linux).
+ECOBEE_UID=$(id -u)
+ECOBEE_GID=$(id -g)
 EOF
 say "${GREEN}✓${OFF} Wrote .env"
 

@@ -17,8 +17,10 @@ COPY tools/ tools/
 # python-ecobee-api, and MIT requires his notice in every copy we distribute.
 COPY LICENSE LICENSE-python-ecobee-api.txt ./
 
-# Run as a non-root user; the data volume is chowned to this uid in compose.
-RUN useradd --create-home --uid 10001 ecobee && chown -R ecobee:ecobee /srv
+# Never run as root. 10001 is the default; docker-compose.yml runs the
+# containers as the host user who owns ./data instead (see its `user:`), so
+# the data folders stay writable on Linux. The code only needs to be readable.
+RUN useradd --create-home --uid 10001 ecobee
 USER ecobee
 
 EXPOSE 8321
