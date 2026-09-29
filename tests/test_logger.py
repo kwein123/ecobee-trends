@@ -321,11 +321,20 @@ class Signals(unittest.TestCase):
                  "--interval", "300"],
                 stderr=subprocess.PIPE, text=True)
             try:
-                lines = []
-                for line in proc.stderr:
-                    lines.append(line)
-                    if "Waiting for a new token file" in line:
-                        break
+                lines, waiting = [], threading.Event()
+
+                def read_until_waiting():
+                    for line in proc.stderr:
+                        lines.append(line)
+                        if "Waiting for a new token file" in line:
+                            waiting.set()
+                            return
+
+                # A time limit, so a logger that never gets there fails the
+                # test instead of hanging CI.
+                threading.Thread(target=read_until_waiting, daemon=True).start()
+                self.assertTrue(waiting.wait(10),
+                                "logger never started waiting:\n" + "".join(lines))
                 proc.send_signal(sig)
                 _, rest = proc.communicate(timeout=10)
             finally:
@@ -336,6 +345,25 @@ class Signals(unittest.TestCase):
 
     def test_sigterm(self):
         self.check(signal.SIGTERM)
+
+    def test_handler_cannot_deadlock_on_the_events_lock(self):
+        # Force the unlucky timing: the signal is handled while the main
+        # thread holds the Event's internal lock, as it briefly does inside
+        # stop.wait(). A handler that called stop.set() directly would wait
+        # forever on a lock its own thread holds.
+        stop, received = threading.Event(), []
+        handler = logger.stop_handler(stop, received)
+
+        def unlucky_timing():
+            with stop._cond:
+                handler(signal.SIGTERM, None)
+
+        t = threading.Thread(target=unlucky_timing, daemon=True)
+        t.start()
+        t.join(5)
+        self.assertFalse(t.is_alive(), "signal handler deadlocked on the Event's lock")
+        self.assertTrue(stop.wait(5))
+        self.assertEqual(received, [signal.SIGTERM])
 
     def test_sigint(self):
         self.check(signal.SIGINT)

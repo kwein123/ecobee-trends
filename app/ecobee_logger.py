@@ -298,12 +298,8 @@ def main() -> int:
     # so `docker stop` would wait out its grace period and SIGKILL it. Just
     # flag the stop; run() acts on it between polls, never mid-transaction.
     stop = threading.Event()
-    received = []
-
-    def request_stop(signum, frame):
-        received.append(signum)
-        stop.set()
-
+    received: list[int] = []
+    request_stop = stop_handler(stop, received)
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
 
@@ -315,6 +311,21 @@ def main() -> int:
     if received:
         _LOGGER.info("Stopped by %s; database closed", signal.Signals(received[0]).name)
     return code
+
+
+def stop_handler(stop: threading.Event, received: list):
+    """A signal handler that asks run() to stop.
+
+    It hands stop.set() to a helper thread rather than calling it directly:
+    Python runs handlers on the main thread between any two steps, and if
+    that happens while the main thread is inside stop.wait() it already
+    holds the Event's (non-reentrant) lock, so calling set() here would
+    deadlock. The helper thread simply waits its turn for the lock.
+    """
+    def request_stop(signum, frame):
+        received.append(signum)
+        threading.Thread(target=stop.set, daemon=True).start()
+    return request_stop
 
 
 def run(config_path: str, db: sqlite3.Connection, interval: int, keep_raw: bool,
