@@ -215,4 +215,10 @@ of a rotating refresh token (see `pyecobee/util.py`).
 
 MIT licensed — see [LICENSE](LICENSE).
 
+The dashboard shows a small "Built by … Sweetbriar Computing" credit in its
+footer. You're free to keep or remove it; the MIT license only requires
+keeping the copyright notice in `LICENSE`. The Sweetbriar Computing name and
+logo (`app/static/sweetbriar-logo.png`) identify the author: the license
+covers the code, not using them as your own branding.
+
 *Not affiliated with or endorsed by ecobee Inc. "ecobee" is their trademark.*

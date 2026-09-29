@@ -279,6 +279,18 @@ class HttpServer(unittest.TestCase):
         self.assertNotIn("<style>", html)
         self.assertNotRegex(html, r"\son[a-z]+\s*=")  # no onclick= etc.
 
+    def test_author_credit_and_logo(self):
+        resp, body = self.request("/")
+        html = body.decode()
+        footer = html[html.index('<footer class="credit">'):]
+        self.assertIn("Built by Kevin Weinrich · Sweetbriar Computing", footer)
+        self.assertIn('href="https://sweetbriarcomputing.com"', footer)
+        self.assertIn('src="static/sweetbriar-logo.png"', footer)
+        resp, logo = self.request("/static/sweetbriar-logo.png")
+        self.assertEqual(resp.status, 200)
+        self.assertTrue(logo.startswith(b"\x89PNG"))
+        self.assertLess(len(logo), 30_000, "keep the logo small; it loads on every visit")
+
     def test_static_assets(self):
         for name, ctype in (("theme.css", "text/css"), ("dashboard.css", "text/css"),
                             ("dashboard.js", "text/javascript"), ("dashboard-core.js", "text/javascript")):
@@ -393,6 +405,8 @@ class SiteBranding(unittest.TestCase):
         self.assertLess(head.index("theme.css"), head.index("brand.css"))
         self.assertLess(head.index("brand.css"), head.index("dashboard.css"))
         self.assertIn("How to read this page", html, "guide link must survive branding")
+        self.assertIn("Built by Kevin Weinrich · Sweetbriar Computing", html,
+                      "author credit must survive branding")
 
     def test_site_files(self):
         resp, body = self.get("/site/logo.png")
