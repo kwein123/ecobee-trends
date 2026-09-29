@@ -32,9 +32,10 @@ import argparse
 import json
 import logging
 import os
+import signal
 import sqlite3
 import sys
-import time
+import threading
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -224,14 +225,17 @@ def _mtime(path: str) -> Optional[int]:
         return None
 
 
-def wait_for_new_config(config_path: str, sleep=time.sleep) -> None:
-    """Block until the token file is rewritten (someone ran the login again).
+def wait_for_new_config(config_path: str, sleep, stop: threading.Event) -> None:
+    """Block until the token file is rewritten (someone ran the login again)
+    or a stop is requested.
 
     Exiting instead would make Docker restart the logger in a loop, hitting
     ecobee's auth endpoint with a dead token every time.
     """
     before = _mtime(config_path)
     while _mtime(config_path) == before:
+        if stop.is_set():
+            return
         sleep(TOKEN_WAIT_CHECK)
     _LOGGER.info("Token file %s changed; resuming", config_path)
 
@@ -290,20 +294,38 @@ def main() -> int:
         )
         return 2
 
+    # As PID 1 in its container the logger gets no default SIGTERM handling,
+    # so `docker stop` would wait out its grace period and SIGKILL it. Just
+    # flag the stop; run() acts on it between polls, never mid-transaction.
+    stop = threading.Event()
+    received = []
+
+    def request_stop(signum, frame):
+        received.append(signum)
+        stop.set()
+
+    signal.signal(signal.SIGTERM, request_stop)
+    signal.signal(signal.SIGINT, request_stop)
+
     db = open_db(os.path.expanduser(args.db))
     try:
-        return run(config_path, db, args.interval, args.raw)
-    except KeyboardInterrupt:
-        return 0
+        code = run(config_path, db, args.interval, args.raw, stop=stop)
     finally:
         db.close()
+    if received:
+        _LOGGER.info("Stopped by %s; database closed", signal.Signals(received[0]).name)
+    return code
 
 
 def run(config_path: str, db: sqlite3.Connection, interval: int, keep_raw: bool,
-        make_client=Ecobee, sleep=time.sleep) -> int:
-    """The polling loop. Returns an exit code (single-poll mode, or fatal)."""
+        make_client=Ecobee, sleep=None, stop: Optional[threading.Event] = None) -> int:
+    """The polling loop. Returns an exit code (single-poll mode, fatal, or 0
+    once `stop` is set). By default it sleeps on `stop` so a stop cuts the
+    wait short."""
+    stop = stop or threading.Event()
+    sleep = sleep or stop.wait
     ecobee = None
-    while True:
+    while not stop.is_set():
         reason = None
         if ecobee is None:
             try:
@@ -331,13 +353,14 @@ def run(config_path: str, db: sqlite3.Connection, interval: int, keep_raw: bool,
             if not interval:
                 return 3
             _LOGGER.error("Waiting for a new token file before polling again.")
-            wait_for_new_config(config_path, sleep)
+            wait_for_new_config(config_path, sleep, stop)
             ecobee = None
             continue
 
         if not interval:
             return 0
         sleep(interval)
+    return 0
 
 
 if __name__ == "__main__":

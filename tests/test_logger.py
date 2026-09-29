@@ -6,8 +6,14 @@ import copy
 import json
 import logging
 import os
+import signal
+import sqlite3
 import stat
+import subprocess
+import sys
 import tempfile
+import threading
+import time
 import unittest
 from unittest import mock
 
@@ -70,6 +76,8 @@ class FakeEcobee:
 
     def update(self):
         step = self.script.pop(0) if self.script else True
+        if callable(step):
+            step = step()
         if isinstance(step, BaseException):
             raise step
         return step
@@ -248,6 +256,89 @@ class RunLoop(unittest.TestCase):
         self.assertEqual(waits, [logger.TOKEN_WAIT_CHECK, logger.TOKEN_WAIT_CHECK, 300])
         self.assertEqual(len(clients), 2, "the token file should be re-read after it changes")
         self.assertEqual(self.rows(), 1)
+
+    def stop_soon(self, stop, waits):
+        """A sleep that has a stop arrive shortly after it starts waiting."""
+        def sleep(s):
+            waits.append(s)
+            threading.Timer(0.05, stop.set).start()
+            return stop.wait(s)
+        return sleep
+
+    def test_stop_during_sleep_returns_promptly(self):
+        factory, _ = self.make(True, True)
+        stop, waits = threading.Event(), []
+        start = time.monotonic()
+        code = logger.run(self.config, self.db, 300, False, make_client=factory,
+                          sleep=self.stop_soon(stop, waits), stop=stop)
+        self.assertEqual(code, 0)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertEqual(waits, [300])
+        self.assertEqual(self.rows(), 1)
+
+    def test_stop_during_a_poll_lets_it_commit_first(self):
+        stop = threading.Event()
+
+        def fetch_then_signal():
+            stop.set()  # arrives while the poll is in flight
+            return True
+
+        factory, _ = self.make(fetch_then_signal, True)
+        start = time.monotonic()
+        code = logger.run(self.config, self.db, 300, False, make_client=factory, stop=stop)
+        self.assertEqual(code, 0)
+        self.assertLess(time.monotonic() - start, 5)
+        self.assertFalse(self.db.in_transaction)
+        # Committed, not just visible on this connection, and no second poll.
+        other = sqlite3.connect(os.path.join(self.dir.name, "ecobee.sqlite3"))
+        self.assertEqual(other.execute("SELECT COUNT(*) FROM thermostat_readings").fetchone()[0], 1)
+        other.close()
+
+    def test_stop_while_waiting_for_a_new_token_file(self):
+        with open(self.config, "w") as f:
+            f.write("not a token file")
+        factory, clients = self.make(True)
+        stop, waits = threading.Event(), []
+        code = logger.run(self.config, self.db, 300, False, make_client=factory,
+                          sleep=self.stop_soon(stop, waits), stop=stop)
+        self.assertEqual(code, 0)
+        self.assertEqual(waits, [logger.TOKEN_WAIT_CHECK])
+        self.assertEqual(self.rows(), 0)
+
+
+@unittest.skipUnless(hasattr(signal, "SIGTERM") and os.name == "posix", "needs POSIX signals")
+class Signals(unittest.TestCase):
+    """The real script, as Docker runs it: SIGTERM/SIGINT must exit 0 quickly."""
+
+    def check(self, sig):
+        with tempfile.TemporaryDirectory() as d:
+            config = os.path.join(d, "ecobee.conf")
+            with open(config, "w") as f:
+                f.write("not a token file")  # so it waits without touching the network
+            proc = subprocess.Popen(
+                [sys.executable, os.path.join(helpers.ROOT, "app", "ecobee_logger.py"),
+                 "--config", config, "--db", os.path.join(d, "ecobee.sqlite3"),
+                 "--interval", "300"],
+                stderr=subprocess.PIPE, text=True)
+            try:
+                lines = []
+                for line in proc.stderr:
+                    lines.append(line)
+                    if "Waiting for a new token file" in line:
+                        break
+                proc.send_signal(sig)
+                _, rest = proc.communicate(timeout=10)
+            finally:
+                proc.kill()
+                proc.wait()
+            self.assertEqual(proc.returncode, 0, "".join(lines) + rest)
+            self.assertIn(f"Stopped by {sig.name}", rest)
+
+    def test_sigterm(self):
+        self.check(signal.SIGTERM)
+
+    def test_sigint(self):
+        self.check(signal.SIGINT)
 
 
 class TokenFileWrite(unittest.TestCase):
