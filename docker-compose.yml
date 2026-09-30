@@ -24,6 +24,10 @@ services:
     image: ${ECOBEE_IMAGE:-ecobee-trends:local}
     container_name: ecobee-logger
     user: *run-as
+    # On `docker compose stop` the logger finishes the poll in progress, and
+    # an ecobee request can take up to 30 s on a slow network. Docker's
+    # default 10 s would force-kill it first.
+    stop_grace_period: 40s
     command: >
       python app/ecobee_logger.py
       --interval ${POLL_INTERVAL:-300}

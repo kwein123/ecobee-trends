@@ -97,6 +97,25 @@ jobs:
           test "$(stat -c %u data/db/ecobee.sqlite3)" = "$(id -u)"
           docker compose down
 
+      - name: Logger stops cleanly on docker stop (exit 0, not 137)
+        # As PID 1 the logger must handle SIGTERM itself, or Docker waits out
+        # the grace period and SIGKILLs it. A dummy token file makes it wait
+        # for a new login instead of calling ecobee. Reuses the step above's
+        # data folders and .env.
+        run: |
+          echo "not a token file" > data/auth/ecobee.conf
+          docker compose up -d logger
+          for _ in $(seq 1 30); do
+            docker compose logs logger | grep -q "Waiting for a new token file" && break
+            sleep 1
+          done
+          docker compose logs logger | grep -q "Waiting for a new token file"
+          docker compose stop -t 5 logger
+          docker compose logs logger
+          test "$(docker inspect -f '{{.State.ExitCode}}' ecobee-logger)" = 0
+          docker compose logs logger | grep -q "Stopped by SIGTERM"
+          docker compose down
+
       - name: Image carries the license notices
         run: |
           docker run --rm ecobee-trends:ci grep -q "Nolan Gilley" LICENSE
